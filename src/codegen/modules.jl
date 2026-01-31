@@ -105,6 +105,12 @@ function _add_file_to_package!(root::ProtoModule, file::ResolvedProtoFile, proto
     return nothing
 end
 
+if Sys.iswindows()
+    _include_format(path::String) = repr(replace(path, r"[/\\+]" => "/"))
+else
+    _include_format(path::String) = repr(replace(path, r"[/+]" => "/"))
+end
+
 function generate_module_file(io::IO, m::ProtoModule, output_directory::AbstractString, parsed_files::Dict, options::Options, depth::Int)
     println(io, "module $(m.name)")
     println(io)
@@ -112,14 +118,14 @@ function generate_module_file(io::IO, m::ProtoModule, output_directory::Abstract
     if depth == 1
         # This is where we include external packages so they are available downstream
         for external_import in m.external_imports
-            println(io, "include(", repr(external_import), ')')
+            println(io, "include(", _include_format(external_import), ')')
         end
         # This is where we include external dependencies that may not be packages.
         # We wrap them in a module to make sure that multiple downstream dependencies
         # can import them safely.
         for nonpkg_import in m.nonpkg_imports
             !options.always_use_modules && print(io, "module $(nonpkg_import)\n    ")
-            println(io, "include(", repr(joinpath("..", string(nonpkg_import, ".jl"))), ')')
+            println(io, "include(", _include_format(joinpath("..", string(nonpkg_import, ".jl"))), ')')
             !options.always_use_modules && println(io, "end")
         end
     else # depth > 1
@@ -165,18 +171,18 @@ function generate_module_file(io::IO, m::ProtoModule, output_directory::Abstract
             if length(namespace(file)) == length(namespace(imported_file)) - 1 && _startswith(namespace(file), namespace(imported_file))
                 submodule_name = last(namespace(imported_file))
                 get!(seen.dict, submodule_name) do
-                    println(io, "include(", repr(joinpath(submodule_name, string(submodule_name, ".jl"))), ")")
+                    println(io, "include(", _include_format(joinpath(submodule_name, string(submodule_name, ".jl"))), ")")
                 end
             end
         end
-        println(io, "include(", repr(proto_script_name(file)), ")")
+        println(io, "include(", _include_format(proto_script_name(file)), ")")
     end
     # Load in submodules nested in this namespace (the modules ending with `PB`),
     # that is, if we didn't include them above.
     for submodule_namespace in submodule_namespaces
         submodule = m.submodules[submodule_namespace]
         get!(seen.dict, submodule.name) do
-            println(io, "include(", repr(joinpath(submodule.name, string(submodule.name, ".jl"))), ")")
+            println(io, "include(", _include_format(joinpath(submodule.name, string(submodule.name, ".jl"))), ")")
         end
     end
     println(io)
@@ -234,12 +240,18 @@ function validate_proto_file_paths!(relative_paths::Vector{<:AbstractString}, se
     return full_paths
 end
 
+if Sys.iswindows()
+    samepath(a, b) = split(normpath(a), r"[/\\+]", keepempty = true) == split(normpath(b), r"[/\\+]", keepempty = true)
+else
+    samepath(a, b) = split(normpath(a), r"[/+]", keepempty = true) == split(normpath(b), r"[/+]", keepempty = true)
+end
+
 function resolve_imports!(imported_paths::Set{String}, parsed_files, search_directories)
     missing_imports = String[]
     while !isempty(imported_paths)
         found = false
         path = pop!(imported_paths)
-        path in keys(parsed_files) && continue
+        any(p -> samepath(p, path), keys(parsed_files)) && continue
         for dir in search_directories
             found && continue
             full_path = joinpath(dir, path)
